@@ -3,7 +3,7 @@
 {% block content %}
 <section class="panel">
   <h1>Author identity</h1>
-  <p class="lede">Set the name that will be attributed to uploads, and the content tags that describe your work.</p>
+  <p class="lede">Set the name that will be attributed to uploads. Content tags mark topics you are reasonably reliable for; other authors may apply those tags to documents they store.</p>
   {% if error %}
     <p class="error">{{ error }}</p>
   {% endif %}
@@ -16,7 +16,7 @@
       Content tags
       <input type="text" name="content_tags" placeholder="geology, internal-memo, q3" value="{{ tag_value }}">
     </label>
-    <p class="hint">Separate tags with commas. They are copied onto documents you upload and used for search.</p>
+    <p class="hint">Separate tags with commas. Tags describe domains of reliability, not a single document.</p>
     <button type="submit">Continue to library</button>
   </form>
 </section>

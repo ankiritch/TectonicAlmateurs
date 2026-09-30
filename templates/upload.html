@@ -3,7 +3,7 @@
 {% block content %}
 <section class="panel">
   <h1>Upload a PDF</h1>
-  <p class="lede">The server will stamp author name and tags into the PDF metadata, store a SHA-256 hash, and index the text for search. Your identity tags ({{ author.tags_list() | join(', ') or 'none' }}) are always applied.</p>
+  <p class="lede">Choose content tags from authors who are considered reliable for those topics (including your own). If this PDF already has a document_id, an unchanged file adds you to its author chain; a changed file becomes a new document that keeps that chain.</p>
   {% if error %}
     <p class="error">{{ error }}</p>
   {% endif %}
@@ -12,10 +12,19 @@
       PDF file
       <input type="file" name="file" accept="application/pdf,.pdf" required>
     </label>
-    <label>
-      Extra content tags
-      <input type="text" name="extra_tags" placeholder="optional extra tags">
-    </label>
+    <fieldset class="tag-picker">
+      <legend>Content tags</legend>
+      {% if available_tags %}
+        {% for tag in available_tags %}
+          <label class="check">
+            <input type="checkbox" name="content_tags" value="{{ tag }}" {% if tag in selected_tags %}checked{% endif %}>
+            {{ tag }}
+          </label>
+        {% endfor %}
+      {% else %}
+        <p class="hint">No author content tags exist yet. Add some on the identity page.</p>
+      {% endif %}
+    </fieldset>
     <button type="submit">Store document</button>
   </form>
 </section>

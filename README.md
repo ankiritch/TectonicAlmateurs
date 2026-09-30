@@ -1,6 +1,8 @@
 # TectonicAlmateurs
 
-Prototype of an internal PDF document library: authors identify themselves, upload PDFs, search the archive, and download files. The server stores author and document records in SQLite, stamps PDF metadata, and keeps a SHA-256 hash of each stored file.
+Prototype of an internal PDF document library: authors identify themselves, upload PDFs, search the archive, and download files.
+
+Author **content tags** mean that person is reasonably reliable for those topics. Documents may only use tags that already exist on some author.
 
 ## Run
 
@@ -23,8 +25,10 @@ pytest
 
 ## What this prototype does
 
-- Identity page: name + content tags, stored as an author row and a signed session cookie (no passwords yet)
-- Upload: PDF only; metadata is assigned (title, author, keywords) and read back into the database
-- Search: SQLite FTS5 over title, tags, author name, and extracted PDF text
-- Download: original stored PDF by document id
-- Trustworthiness (light): SHA-256 of the stored file, author attribution, upload timestamp
+- Identity: name + content tags (domains of reliability), stored as an author row and a signed session cookie
+- Upload: PDF only; you pick content tags from existing authors. The PDF is stamped with `document_id` and `document_hash`
+- Same `document_id` and hash: the uploader is added to the document’s author list
+- Same `document_id` but a different hash: a new document is stored (new id, hash, upload date, tags) with the previous author chain
+- Server record: authors, `document_hash`, `document_id`, `upload_date`, content tags, share points
+- Search: match content and content tags, then rank by share points (see `app/ranking.py` to plug in trustworthiness later)
+- Download: awards one share point

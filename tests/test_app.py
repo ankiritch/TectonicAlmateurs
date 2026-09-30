@@ -2,18 +2,30 @@ from io import BytesIO
 
 import pytest
 from fastapi.testclient import TestClient
-from pypdf import PdfWriter
-def build_pdf(*, title: str, body: str) -> bytes:
+from pypdf import PdfReader, PdfWriter
+
+
+def build_pdf(*, title: str, body: str, extra_pages: int = 0) -> bytes:
     writer = PdfWriter()
-    page = writer.add_blank_page(width=400, height=400)
-    # Store searchable body in metadata as well; page text extraction is optional.
+    writer.add_blank_page(width=400, height=400)
+    for _ in range(extra_pages):
+        writer.add_blank_page(width=400, height=400)
     writer.add_metadata({"/Title": title, "/Subject": body})
-    # Best-effort text on page via /Contents is not trivial; FTS also indexes title/tags.
     output = BytesIO()
     writer.write(output)
-    data = output.getvalue()
-    del page
-    return data
+    return output.getvalue()
+
+
+def with_changed_pages(data: bytes) -> bytes:
+    reader = PdfReader(BytesIO(data))
+    writer = PdfWriter()
+    writer.append(reader)
+    writer.add_blank_page(width=400, height=400)
+    if reader.metadata:
+        writer.add_metadata(dict(reader.metadata))
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
 
 
 @pytest.fixture
@@ -21,8 +33,8 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "data" / "library.db"))
     monkeypatch.setenv("SESSION_SECRET", "test-secret")
-    from app.db import reset_engine, init_db
     from app.config import ensure_data_dirs
+    from app.db import init_db, reset_engine
 
     reset_engine()
     ensure_data_dirs()
@@ -52,31 +64,35 @@ def test_upload_search_download_flow(client: TestClient):
     upload = client.post(
         "/api/documents",
         files={"file": ("core.pdf", pdf, "application/pdf")},
-        data={"extra_tags": "lab-notes"},
+        data={"extra_tags": "basalt, internal"},
     )
     assert upload.status_code == 200, upload.text
     payload = upload.json()
     assert payload["title"] == "Core Sample Report"
-    assert payload["author"]["name"] == "Ada Geologist"
-    assert "basalt" in payload["content_tags"]
-    assert "lab-notes" in payload["content_tags"]
-    assert payload["pdf_metadata"]["Author"] == "Ada Geologist"
-    assert len(payload["sha256"]) == 64
+    assert payload["authors"][0]["name"] == "Ada Geologist"
+    assert payload["content_tags"] == ["basalt", "internal"]
+    assert payload["pdf_metadata"]["document_id"] == payload["document_id"]
+    assert payload["pdf_metadata"]["document_hash"] == payload["document_hash"]
+    assert payload["share_points"] == 0
+    assert len(payload["document_hash"]) == 64
 
     found = client.get("/api/documents", params={"q": "Core"})
     assert found.status_code == 200
-    assert found.json()[0]["id"] == payload["id"]
+    assert found.json()[0]["document_id"] == payload["document_id"]
 
-    tagged = client.get("/api/documents", params={"tag": "lab-notes"})
-    assert tagged.json()[0]["id"] == payload["id"]
+    tagged = client.get("/api/documents", params={"q": "basalt"})
+    assert tagged.json()[0]["document_id"] == payload["document_id"]
 
-    meta = client.get(f"/api/documents/{payload['id']}")
-    assert meta.json()["sha256"] == payload["sha256"]
+    meta = client.get(f"/api/documents/{payload['document_id']}")
+    assert meta.json()["document_hash"] == payload["document_hash"]
 
-    download = client.get(f"/api/documents/{payload['id']}/file")
+    download = client.get(f"/api/documents/{payload['document_id']}/file")
     assert download.status_code == 200
     assert download.headers["content-type"].startswith("application/pdf")
     assert download.content[:4] == b"%PDF"
+
+    after = client.get(f"/api/documents/{payload['document_id']}")
+    assert after.json()["share_points"] == 1
 
 
 def test_rejects_non_pdf(client: TestClient):
@@ -86,3 +102,81 @@ def test_rejects_non_pdf(client: TestClient):
         files={"file": ("notes.txt", b"not a pdf", "text/plain")},
     )
     assert response.status_code == 400
+
+
+def test_rejects_unknown_content_tags(client: TestClient):
+    identify(client)
+    pdf = build_pdf(title="Memo", body="notes")
+    response = client.post(
+        "/api/documents",
+        files={"file": ("memo.pdf", pdf, "application/pdf")},
+        data={"content_tags": "not-a-real-tag"},
+    )
+    assert response.status_code == 400
+
+
+def test_same_document_id_adds_author_when_hash_matches(client: TestClient):
+    identify(client, name="Ada Geologist", tags="basalt")
+    pdf = build_pdf(title="Shared Report", body="field notes")
+    first = client.post(
+        "/api/documents",
+        files={"file": ("shared.pdf", pdf, "application/pdf")},
+        data={"content_tags": "basalt"},
+    )
+    assert first.status_code == 200, first.text
+    stored = client.get(f"/api/documents/{first.json()['document_id']}/file")
+    identify(client, name="Bea Mapper", tags="maps")
+    second = client.post(
+        "/api/documents",
+        files={"file": ("shared.pdf", stored.content, "application/pdf")},
+        data={"content_tags": "maps"},
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["document_id"] == first.json()["document_id"]
+    names = [item["name"] for item in second.json()["authors"]]
+    assert names == ["Ada Geologist", "Bea Mapper"]
+
+
+def test_changed_file_keeps_author_chain_with_new_id(client: TestClient):
+    identify(client, name="Ada Geologist", tags="basalt")
+    pdf = build_pdf(title="Evolving Report", body="version one")
+    first = client.post(
+        "/api/documents",
+        files={"file": ("evo.pdf", pdf, "application/pdf")},
+        data={"content_tags": "basalt"},
+    )
+    stored = client.get(f"/api/documents/{first.json()['document_id']}/file")
+    changed = with_changed_pages(stored.content)
+    identify(client, name="Bea Mapper", tags="maps")
+    second = client.post(
+        "/api/documents",
+        files={"file": ("evo.pdf", changed, "application/pdf")},
+        data={"content_tags": "maps"},
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["document_id"] != first.json()["document_id"]
+    assert second.json()["document_hash"] != first.json()["document_hash"]
+    assert second.json()["predecessor_id"] == first.json()["document_id"]
+    names = [item["name"] for item in second.json()["authors"]]
+    assert names == ["Ada Geologist", "Bea Mapper"]
+    assert second.json()["content_tags"] == ["maps"]
+
+
+def test_search_ranks_by_share_points(client: TestClient):
+    identify(client, tags="basalt")
+    first = client.post(
+        "/api/documents",
+        files={"file": ("a.pdf", build_pdf(title="Alpha Note", body="shared topic"), "application/pdf")},
+        data={"content_tags": "basalt"},
+    )
+    second = client.post(
+        "/api/documents",
+        files={"file": ("b.pdf", build_pdf(title="Beta Note", body="shared topic"), "application/pdf")},
+        data={"content_tags": "basalt"},
+    )
+    client.get(f"/api/documents/{second.json()['document_id']}/file")
+    client.get(f"/api/documents/{second.json()['document_id']}/file")
+    ranked = client.get("/api/documents", params={"q": "shared"})
+    ids = [item["document_id"] for item in ranked.json()]
+    assert ids[0] == second.json()["document_id"]
+    assert first.json()["document_id"] in ids

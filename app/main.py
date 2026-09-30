@@ -17,20 +17,25 @@ from app.config import BASE_DIR, ensure_data_dirs, session_secret, upload_dir
 from app.db import (
     Author,
     Document,
+    all_author_tags,
+    get_document_by_public_id,
     get_session,
     init_db,
     parse_tags,
     search_documents,
+    set_author_chain,
     tags_to_json,
     upsert_fts,
+    validate_content_tags,
 )
 from app.pdf_utils import (
     PdfProcessingError,
     apply_metadata,
+    document_content_hash,
     extract_text,
     read_pdf_info,
-    sha256_bytes,
 )
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -55,19 +60,36 @@ def require_author(request: Request, db: Session = Depends(get_session)) -> Auth
 def document_payload(document: Document) -> dict:
     return {
         "id": document.id,
+        "document_id": document.document_id,
+        "document_hash": document.document_hash,
         "filename": document.filename,
         "title": document.title,
-        "sha256": document.sha256,
         "content_tags": document.tags_list(),
         "pdf_metadata": document.metadata_dict(),
-        "uploaded_at": document.uploaded_at.isoformat(),
-        "author": {
-            "id": document.author.id,
-            "name": document.author.name,
-            "content_tags": document.author.tags_list(),
-        },
-        "download_url": f"/api/documents/{document.id}/file",
+        "upload_date": document.upload_date.isoformat(),
+        "share_points": document.share_points,
+        "predecessor_id": document.predecessor.document_id if document.predecessor else None,
+        "authors": [
+            {
+                "id": author.id,
+                "name": author.name,
+                "content_tags": author.tags_list(),
+            }
+            for author in document.authors()
+        ],
+        "download_url": f"/api/documents/{document.document_id}/file",
     }
+
+
+def upload_context(author: Author, db: Session, extra: dict | None = None) -> dict:
+    context = {
+        "author": author,
+        "available_tags": all_author_tags(db),
+        "selected_tags": author.tags_list(),
+    }
+    if extra:
+        context.update(extra)
+    return context
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -133,17 +155,13 @@ def upload_page(request: Request, db: Session = Depends(get_session)):
     current = current_author(request, db)
     if current is None:
         return RedirectResponse("/", status_code=303)
-    return templates.TemplateResponse(
-        request,
-        "upload.html",
-        {"author": current, "default_tags": ", ".join(current.tags_list())},
-    )
+    return templates.TemplateResponse(request, "upload.html", upload_context(current, db))
 
 
 @app.post("/upload")
 async def upload_from_form(
     request: Request,
-    extra_tags: str = Form(""),
+    content_tags: list[str] = Form(default=[]),
     file: UploadFile = File(...),
     db: Session = Depends(get_session),
 ):
@@ -151,16 +169,12 @@ async def upload_from_form(
     if current is None:
         return RedirectResponse("/", status_code=303)
     try:
-        document = await store_upload(file, current, extra_tags, db)
+        document = await store_upload(file, current, content_tags, db)
     except HttpishError as exc:
         return templates.TemplateResponse(
             request,
             "upload.html",
-            {
-                "author": current,
-                "default_tags": extra_tags or ", ".join(current.tags_list()),
-                "error": exc.detail,
-            },
+            upload_context(current, db, {"error": exc.detail, "selected_tags": content_tags}),
             status_code=exc.status_code,
         )
     return RedirectResponse(f"/library?q={document.title}", status_code=303)
@@ -180,11 +194,11 @@ def api_search(
 
 @app.get("/api/documents/{document_id}")
 def api_metadata(
-    document_id: int,
+    document_id: str,
     db: Session = Depends(get_session),
     _user: Author = Depends(require_author),
 ):
-    document = db.get(Document, document_id)
+    document = get_document_by_public_id(db, document_id)
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found.")
     return document_payload(document)
@@ -192,16 +206,18 @@ def api_metadata(
 
 @app.get("/api/documents/{document_id}/file")
 def api_download(
-    document_id: int,
+    document_id: str,
     db: Session = Depends(get_session),
     _user: Author = Depends(require_author),
 ):
-    document = db.get(Document, document_id)
+    document = get_document_by_public_id(db, document_id)
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found.")
     path = Path(document.stored_path)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Stored file is missing.")
+    document.share_points += 1
+    db.commit()
     return FileResponse(
         path,
         media_type="application/pdf",
@@ -211,13 +227,15 @@ def api_download(
 
 @app.post("/api/documents")
 async def api_upload(
+    content_tags: list[str] = Form(default=[]),
     extra_tags: str = Form(""),
     file: UploadFile = File(...),
     db: Session = Depends(get_session),
     author: Author = Depends(require_author),
 ):
+    tags = list(content_tags) + parse_tags(extra_tags)
     try:
-        document = await store_upload(file, author, extra_tags, db)
+        document = await store_upload(file, author, tags, db)
     except HttpishError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     return document_payload(document)
@@ -230,10 +248,15 @@ class HttpishError(Exception):
         super().__init__(detail)
 
 
+def _extract_search_text(data: bytes, info: dict[str, str]) -> str:
+    page_text = extract_text(data)
+    return "\n".join(part for part in [page_text, " ".join(info.values())] if part)
+
+
 async def store_upload(
     file: UploadFile,
     author: Author,
-    extra_tags: str,
+    selected_tags: list[str],
     db: Session,
 ) -> Document:
     filename = Path(file.filename or "document.pdf").name
@@ -252,38 +275,70 @@ async def store_upload(
 
     try:
         info = read_pdf_info(data)
-        page_text = extract_text(data)
+        incoming_hash = document_content_hash(data)
+        body_text = _extract_search_text(data, info)
     except PdfProcessingError as exc:
         raise HttpishError(400, str(exc)) from exc
-    body_text = "\n".join(
-        part for part in [page_text, " ".join(info.values())] if part
-    )
+
+    try:
+        tags = validate_content_tags(db, selected_tags)
+    except ValueError as exc:
+        raise HttpishError(400, str(exc)) from exc
 
     title = info.get("Title") or Path(filename).stem
-    tags = author.tags_list() + parse_tags(extra_tags)
-    tag_json = tags_to_json(tags)
-    tags = json.loads(tag_json)
+    incoming_id = (info.get("document_id") or "").strip()
+    existing = get_document_by_public_id(db, incoming_id) if incoming_id else None
 
-    stamped = apply_metadata(data, title=title, author=author.name, tags=tags)
-    digest = sha256_bytes(stamped)
-    stored_name = f"{digest[:16]}-{uuid.uuid4().hex}.pdf"
+    if existing is not None and existing.document_hash == incoming_hash:
+        chain = existing.authors()
+        if all(item.id != author.id for item in chain):
+            chain = chain + [author]
+            set_author_chain(existing, chain)
+            db.commit()
+            db.refresh(existing)
+            upsert_fts(db, existing)
+            db.commit()
+        return existing
+
+    predecessor = None
+    chain = [author]
+    if existing is not None and existing.document_hash != incoming_hash:
+        predecessor = existing
+        chain = existing.authors()
+        if all(item.id != author.id for item in chain):
+            chain = chain + [author]
+
+    public_id = str(uuid.uuid4())
+    author_label = ", ".join(item.name for item in chain)
+    stamped = apply_metadata(
+        data,
+        title=title,
+        author=author_label,
+        tags=tags,
+        document_id=public_id,
+        document_hash=incoming_hash,
+    )
+    stored_name = f"{public_id}.pdf"
     stored_path = upload_dir() / stored_name
     stored_path.write_bytes(stamped)
-
     stored_info = read_pdf_info(stamped)
+
     document = Document(
+        document_id=public_id,
+        document_hash=incoming_hash,
         filename=filename,
         stored_path=str(stored_path),
-        sha256=digest,
         title=title,
-        author_id=author.id,
-        content_tags=tag_json,
+        content_tags=tags_to_json(tags),
         pdf_metadata=json.dumps(stored_info),
         extracted_text=body_text,
+        predecessor=predecessor,
     )
     db.add(document)
+    db.flush()
+    set_author_chain(document, chain)
     db.commit()
     db.refresh(document)
-    upsert_fts(db, document, author.name)
+    upsert_fts(db, document)
     db.commit()
     return document

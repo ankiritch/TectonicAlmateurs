@@ -3,8 +3,9 @@
 {% block content %}
 <section class="panel">
   <h1>Document library</h1>
+  <p class="lede">Results match content and content tags, then rank by share points (one point per download). Trustworthiness ranking can be added later.</p>
   <form method="get" action="/library" class="search-row">
-    <input type="search" name="q" value="{{ q }}" placeholder="Search title, tags, author, or PDF text">
+    <input type="search" name="q" value="{{ q }}" placeholder="Search content or content tags">
     <input type="text" name="tag" value="{{ tag }}" placeholder="Filter tag">
     <input type="text" name="author" value="{{ author_filter }}" placeholder="Filter author">
     <button type="submit">Search</button>
@@ -17,17 +18,19 @@
       <li class="doc-card">
         <div>
           <h2>{{ doc.title }}</h2>
-          <p class="meta">{{ doc.filename }} · uploaded {{ doc.uploaded_at.strftime("%Y-%m-%d %H:%M") }} UTC by {{ doc.author.name }}</p>
+          <p class="meta">{{ doc.filename }} · {{ doc.upload_date.strftime("%Y-%m-%d %H:%M") }} UTC · {{ doc.share_points }} share point{{ '' if doc.share_points == 1 else 's' }}</p>
+          <p class="meta">Authors: {{ doc.author_names() | join(', ') }}</p>
           <p class="tags">
             {% for tag in doc.tags_list() %}
               <span class="tag">{{ tag }}</span>
             {% endfor %}
           </p>
-          <p class="hash" title="SHA-256 of stored file">{{ doc.sha256 }}</p>
+          <p class="hash" title="document_id">id {{ doc.document_id }}</p>
+          <p class="hash" title="document_hash">hash {{ doc.document_hash }}</p>
         </div>
         <div class="actions">
-          <a class="button" href="/api/documents/{{ doc.id }}/file">Download</a>
-          <a class="ghost" href="/api/documents/{{ doc.id }}">Metadata</a>
+          <a class="button" href="/api/documents/{{ doc.document_id }}/file">Download</a>
+          <a class="ghost" href="/api/documents/{{ doc.document_id }}">Metadata</a>
         </div>
       </li>
     {% endfor %}

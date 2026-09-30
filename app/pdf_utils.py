@@ -61,12 +61,36 @@ def extract_text(data: bytes, max_pages: int = 25) -> str:
     return "\n".join(chunks).strip()
 
 
+def _page_content_bytes(page) -> bytes:
+    contents = page.get_contents()
+    if contents is None:
+        return b""
+    if isinstance(contents, list):
+        return b"".join(item.get_data() for item in contents)
+    return contents.get_data()
+
+
+def document_content_hash(data: bytes) -> str:
+    """Hash page streams so Info metadata can be stamped without forking the document."""
+    try:
+        reader = PdfReader(BytesIO(data))
+    except PdfReadError as exc:
+        raise PdfProcessingError("Could not read PDF file.") from exc
+    digest = hashlib.sha256()
+    digest.update(str(len(reader.pages)).encode())
+    for page in reader.pages:
+        digest.update(_page_content_bytes(page))
+    return digest.hexdigest()
+
+
 def apply_metadata(
     data: bytes,
     *,
     title: str,
     author: str,
     tags: list[str],
+    document_id: str,
+    document_hash: str,
 ) -> bytes:
     try:
         reader = PdfReader(BytesIO(data))
@@ -77,6 +101,8 @@ def apply_metadata(
                 "/Title": title,
                 "/Author": author,
                 "/Keywords": ", ".join(tags),
+                "/document_id": document_id,
+                "/document_hash": document_hash,
                 "/Producer": "TectonicAlmateurs",
             }
         )
