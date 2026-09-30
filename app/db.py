@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -408,3 +410,82 @@ def search_documents(
     if tag:
         documents = [item for item in documents if _has_exact_tag(item, tag.strip())]
     return rank_documents(documents, criteria)
+
+
+@dataclass
+class DocumentVersion:
+    number: int
+    document: Document
+
+
+@dataclass
+class DocumentLineage:
+    versions: list[DocumentVersion]
+    score: float
+
+    @property
+    def latest(self) -> Document:
+        return self.versions[-1].document
+
+    @property
+    def original(self) -> Document:
+        return self.versions[0].document
+
+
+def _lineage_members(root_id: int, children: dict[int, list[Document]], by_pk: dict[int, Document]) -> list[Document]:
+    ordered: list[Document] = []
+    seen: set[int] = set()
+
+    def walk(pk: int) -> None:
+        if pk in seen or pk not in by_pk:
+            return
+        seen.add(pk)
+        ordered.append(by_pk[pk])
+        kids = sorted(
+            children.get(pk, []),
+            key=lambda item: (item.upload_date, item.id),
+        )
+        for kid in kids:
+            walk(kid.id)
+
+    walk(root_id)
+    ordered.sort(key=lambda item: (item.upload_date, item.id))
+    return ordered
+
+
+def group_by_lineage(db, matched: list[Document]) -> list[DocumentLineage]:
+    """Collapse revisions of one original file into a single search result."""
+    if not matched:
+        return []
+    rows = db.execute(select(Document).options(*DOCUMENT_LOAD)).unique().scalars().all()
+    by_pk = {item.id: item for item in rows}
+    children: dict[int, list[Document]] = defaultdict(list)
+    for item in rows:
+        if item.predecessor_id:
+            children[item.predecessor_id].append(item)
+
+    def root_pk(document: Document) -> int:
+        seen: set[int] = set()
+        current = document
+        while current.predecessor_id and current.predecessor_id in by_pk and current.id not in seen:
+            seen.add(current.id)
+            current = by_pk[current.predecessor_id]
+        return current.id
+
+    matched_scores = {item.id: getattr(item, "rank_score", 0.0) for item in matched}
+    groups: dict[int, DocumentLineage] = {}
+    for item in matched:
+        root = root_pk(item)
+        if root in groups:
+            continue
+        members = _lineage_members(root, children, by_pk)
+        versions = [DocumentVersion(number=index, document=member) for index, member in enumerate(members, start=1)]
+        score = max((matched_scores.get(member.id, 0.0) for member in members), default=0.0)
+        groups[root] = DocumentLineage(versions=versions, score=score)
+
+    def sort_key(lineage: DocumentLineage) -> tuple[float, float]:
+        uploaded = lineage.latest.upload_date
+        stamp = uploaded.timestamp() if uploaded is not None else 0.0
+        return (lineage.score, stamp)
+
+    return sorted(groups.values(), key=sort_key, reverse=True)

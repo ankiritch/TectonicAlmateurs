@@ -26,35 +26,43 @@
         </div>
       </section>
 
-      {% if documents %}
+      {% if groups %}
         <ul class="doc-list">
-          {% for doc in documents %}
-            <li class="doc-card">
+          {% for group in groups %}
+            <li class="doc-card version-group">
               <div>
-                <h2>{{ doc.title }}</h2>
-                <p class="meta">{{ doc.filename }} · {{ doc.upload_date.strftime("%Y-%m-%d %H:%M") }} UTC · {{ doc.share_points }} share point{{ '' if doc.share_points == 1 else 's' }} · score {{ '%.2f'|format(doc.rank_score) }}</p>
-                {% if doc.predecessor %}
-                  <p class="meta">New version of {{ doc.predecessor.title }}</p>
-                {% endif %}
-                <p class="meta">
-                  Authors:
-                  {% for person in doc.authors() %}
-                    {{ person.name }}{% if person.verified %} (verified){% endif %}{% if not loop.last %}, {% endif %}
+                <h2>{{ group.latest.title }}</h2>
+                <p class="meta">{{ group.versions|length }} version{{ '' if group.versions|length == 1 else 's' }} · original {{ group.original.upload_date.strftime("%Y-%m-%d %H:%M") }} UTC · score {{ '%.2f'|format(group.score) }}</p>
+                <ol class="versions">
+                  {% for version in group.versions|reverse %}
+                    {% set doc = version.document %}
+                    <li class="version">
+                      <div>
+                        <p class="version-label">Version {{ version.number }} · {{ doc.upload_date.strftime("%Y-%m-%d %H:%M") }} UTC{% if searching and doc.document_id in matched_ids %} · matches search{% endif %}</p>
+                        <p class="meta">{{ doc.filename }} · {{ doc.share_points }} share point{{ '' if doc.share_points == 1 else 's' }}</p>
+                        <p class="meta">
+                          Authors:
+                          {% for person in doc.authors() %}
+                            {{ person.name }}{% if person.verified %} (verified){% endif %}{% if not loop.last %}, {% endif %}
+                          {% endfor %}
+                          · {{ doc.country or "No region" }}
+                          · AI {{ "yes" if doc.ai_used else "no" }}
+                        </p>
+                        <p class="tags">
+                          {% for item in doc.tags_list() %}
+                            <span class="tag{% if item in doc.verified_tags_on_document() %} verified{% endif %}">{{ item }}{% if item in doc.verified_tags_on_document() %} verified{% endif %}</span>
+                          {% endfor %}
+                        </p>
+                        <p class="hash" title="document_id">id {{ doc.document_id }}</p>
+                        <p class="hash" title="document_hash">hash {{ doc.document_hash }}</p>
+                      </div>
+                      <div class="actions">
+                        <a class="button" href="/api/documents/{{ doc.document_id }}/file">Download</a>
+                        <a class="ghost" href="/api/documents/{{ doc.document_id }}">Metadata</a>
+                      </div>
+                    </li>
                   {% endfor %}
-                  · {{ doc.country or "No region" }}
-                  · AI {{ "yes" if doc.ai_used else "no" }}
-                </p>
-                <p class="tags">
-                  {% for item in doc.tags_list() %}
-                    <span class="tag{% if item in doc.verified_tags_on_document() %} verified{% endif %}">{{ item }}{% if item in doc.verified_tags_on_document() %} verified{% endif %}</span>
-                  {% endfor %}
-                </p>
-                <p class="hash" title="document_id">id {{ doc.document_id }}</p>
-                <p class="hash" title="document_hash">hash {{ doc.document_hash }}</p>
-              </div>
-              <div class="actions">
-                <a class="button" href="/api/documents/{{ doc.document_id }}/file">Download</a>
-                <a class="ghost" href="/api/documents/{{ doc.document_id }}">Metadata</a>
+                </ol>
               </div>
             </li>
           {% endfor %}

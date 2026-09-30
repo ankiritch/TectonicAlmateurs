@@ -22,6 +22,7 @@ from app.db import (
     get_document_by_hash,
     get_document_by_public_id,
     get_session,
+    group_by_lineage,
     init_db,
     list_authors,
     parse_tags,
@@ -219,7 +220,9 @@ def library_page(
         "library.html",
         {
             "author": current,
-            "documents": documents,
+            "groups": group_by_lineage(db, documents),
+            "matched_ids": {item.document_id for item in documents},
+            "searching": bool(q.strip() or tag.strip() or author.strip()),
             "q": q,
             "tag": tag,
             "author_filter": author,

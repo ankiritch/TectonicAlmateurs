@@ -199,8 +199,12 @@ def test_writing_over_a_file_stores_a_new_version(client: TestClient):
     assert [item["name"] for item in second.json()["authors"]] == ["Ada Geologist"]
     found = client.get("/api/documents", params={"q": "correction"})
     assert found.json()[0]["document_id"] == second.json()["document_id"]
-    page = client.get("/library", params={"q": "Marked"})
-    assert "New version of Marked Report" in page.text
+    page = client.get("/library", params={"q": "correction"})
+    text = page.text
+    assert "Version 2" in text
+    assert "Version 1" in text
+    assert text.index("Version 2") < text.index("Version 1")
+    assert text.count("Marked Report") == 1
 
 
 def test_same_content_without_document_id_adds_author(client: TestClient):

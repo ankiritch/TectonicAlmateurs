@@ -31,6 +31,6 @@ pytest
 - Same `document_id` but a different hash, including writing or other markup on the page: a new document is stored (new id, hash, upload date, tags) with the previous author chain
 - If `document_id` is missing but the content hash uniquely matches, the uploader is still added to that author list
 - Server record: authors, `document_hash`, `document_id`, `upload_date`, content tags, share points
-- Search: match content and content tags. Tag and author filters are dropdowns of values that already exist
+- Search: match content and content tags. Revisions of the same original file are one result, listed as version and date. Tag and author filters are dropdowns of values that already exist
 - Ranking: a side panel weights verified author, per-tag verification, document age, place, AI use, and share points from 0 to 10. The score is the weighted average of those criteria (`app/ranking.py`). Weights stay in the page and in session storage until Reset
 - Download: awards one share point
