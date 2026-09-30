@@ -33,6 +33,9 @@
               <div>
                 <h2>{{ doc.title }}</h2>
                 <p class="meta">{{ doc.filename }} · {{ doc.upload_date.strftime("%Y-%m-%d %H:%M") }} UTC · {{ doc.share_points }} share point{{ '' if doc.share_points == 1 else 's' }} · score {{ '%.2f'|format(doc.rank_score) }}</p>
+                {% if doc.predecessor %}
+                  <p class="meta">New version of {{ doc.predecessor.title }}</p>
+                {% endif %}
                 <p class="meta">
                   Authors:
                   {% for person in doc.authors() %}

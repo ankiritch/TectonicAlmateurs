@@ -419,7 +419,10 @@ async def store_upload(
 
     title = info.get("Title") or Path(filename).stem
     incoming_id = (info.get("document_id") or "").strip()
+    embedded_hash = (info.get("document_hash") or "").strip()
     existing = get_document_by_public_id(db, incoming_id) if incoming_id else None
+    if existing is None and embedded_hash:
+        existing = get_document_by_hash(db, embedded_hash)
     if existing is None:
         existing = get_document_by_hash(db, incoming_hash)
 

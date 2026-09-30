@@ -164,6 +164,45 @@ def test_changed_file_keeps_author_chain_with_new_id(client: TestClient):
     assert second.json()["content_tags"] == ["maps"]
 
 
+def test_writing_over_a_file_stores_a_new_version(client: TestClient):
+    from pypdf import PdfReader, PdfWriter
+    from pypdf.annotations import FreeText
+
+    identify(client, name="Ada Geologist", tags="basalt")
+    pdf = build_pdf(title="Marked Report", body="version one")
+    first = client.post(
+        "/api/documents",
+        files={"file": ("marked.pdf", pdf, "application/pdf")},
+        data={"content_tags": "basalt"},
+    )
+    assert first.status_code == 200, first.text
+    stored = client.get(f"/api/documents/{first.json()['document_id']}/file")
+    reader = PdfReader(BytesIO(stored.content))
+    writer = PdfWriter()
+    writer.append(reader)
+    if reader.metadata:
+        writer.add_metadata({key: value for key, value in reader.metadata.items()})
+    writer.add_annotation(
+        page_number=0,
+        annotation=FreeText(text="correction in the margin", rect=(30, 30, 180, 80)),
+    )
+    edited = BytesIO()
+    writer.write(edited)
+    second = client.post(
+        "/api/documents",
+        files={"file": ("marked.pdf", edited.getvalue(), "application/pdf")},
+        data={"content_tags": "basalt"},
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["document_id"] != first.json()["document_id"]
+    assert second.json()["predecessor_id"] == first.json()["document_id"]
+    assert [item["name"] for item in second.json()["authors"]] == ["Ada Geologist"]
+    found = client.get("/api/documents", params={"q": "correction"})
+    assert found.json()[0]["document_id"] == second.json()["document_id"]
+    page = client.get("/library", params={"q": "Marked"})
+    assert "New version of Marked Report" in page.text
+
+
 def test_same_content_without_document_id_adds_author(client: TestClient):
     identify(client, name="Ada Geologist", tags="basalt")
     pdf = build_pdf(title="Unstamped Report", body="field notes")

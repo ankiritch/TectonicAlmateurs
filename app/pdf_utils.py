@@ -57,8 +57,13 @@ def extract_text(data: bytes, max_pages: int = 25) -> str:
         try:
             chunks.append(page.extract_text() or "")
         except Exception:
-            continue
-    return "\n".join(chunks).strip()
+            pass
+        for annot in _page_annotations(page):
+            obj = annot.get_object() if hasattr(annot, "get_object") else annot
+            contents = obj.get("/Contents") if hasattr(obj, "get") else None
+            if contents:
+                chunks.append(str(contents))
+    return "\n".join(part for part in chunks if part).strip()
 
 
 def _page_content_bytes(page) -> bytes:
@@ -70,8 +75,42 @@ def _page_content_bytes(page) -> bytes:
     return contents.get_data()
 
 
+# Visible markup. /P is the page back-reference and changes when the file is rewritten.
+_ANNOTATION_KEYS = ("/Subtype", "/Contents", "/Rect", "/DS", "/DA", "/InkList", "/QuadPoints", "/Name", "/T")
+
+
+def _page_annotations(page) -> list:
+    annots = page.get("/Annots")
+    if not annots:
+        return []
+    try:
+        return list(annots)
+    except TypeError:
+        return []
+
+
+def _annotation_fingerprint(annot) -> bytes:
+    obj = annot.get_object() if hasattr(annot, "get_object") else annot
+    parts: list[bytes] = []
+    for key in _ANNOTATION_KEYS:
+        if key not in obj:
+            continue
+        parts.append(f"{key}={obj[key]}".encode("utf-8", errors="replace"))
+    appearance = obj.get("/AP")
+    if appearance is not None:
+        stream = appearance.get_object() if hasattr(appearance, "get_object") else appearance
+        if hasattr(stream, "get_data"):
+            try:
+                parts.append(b"AP=" + stream.get_data())
+            except Exception:
+                parts.append(b"AP=" + str(stream).encode("utf-8", errors="replace"))
+        else:
+            parts.append(b"AP=" + str(stream).encode("utf-8", errors="replace"))
+    return b"\n".join(parts)
+
+
 def document_content_hash(data: bytes) -> str:
-    """Hash page streams so Info metadata can be stamped without forking the document."""
+    """Hash page streams and markup. Info metadata can change without forking the document."""
     try:
         reader = PdfReader(BytesIO(data))
     except PdfReadError as exc:
@@ -80,6 +119,10 @@ def document_content_hash(data: bytes) -> str:
     digest.update(str(len(reader.pages)).encode())
     for page in reader.pages:
         digest.update(_page_content_bytes(page))
+        marks = sorted(_annotation_fingerprint(annot) for annot in _page_annotations(page))
+        digest.update(str(len(marks)).encode())
+        for mark in marks:
+            digest.update(mark)
     return digest.hexdigest()
 
 
