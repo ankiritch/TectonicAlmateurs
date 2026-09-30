@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Upload{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Upload a PDF</h1>
+  <p class="lede">Pick existing content tags or type new ones. A tag does not need an expert before you can use it. Label where the document is made for, and whether AI was used. If this PDF already has a document_id, an unchanged file adds you to its author chain; a changed file becomes a new document that keeps that chain.</p>
+  {% if error %}
+    <p class="error">{{ error }}</p>
+  {% endif %}
+  <form method="post" action="/upload" enctype="multipart/form-data" class="stack">
+    <label>
+      PDF file
+      <input type="file" name="file" accept="application/pdf,.pdf" required>
+    </label>
+    <label>
+      Made for
+      <select name="country" required>
+        {% for group, labels in region_groups %}
+          <optgroup label="{{ group }}">
+            {% for label in labels %}
+              <option value="{{ label }}" {% if label == selected_country %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </optgroup>
+        {% endfor %}
+      </select>
+    </label>
+    <fieldset class="tag-picker">
+      <legend>AI used</legend>
+      <label class="check">
+        <input type="radio" name="ai_used" value="no" {% if not ai_used %}checked{% endif %}>
+        No
+      </label>
+      <label class="check">
+        <input type="radio" name="ai_used" value="yes" {% if ai_used %}checked{% endif %}>
+        Yes
+      </label>
+    </fieldset>
+    <fieldset class="tag-picker">
+      <legend>Content tags</legend>
+      {% if available_tags %}
+        {% for tag in available_tags %}
+          <label class="check">
+            <input type="checkbox" name="content_tags" value="{{ tag }}" {% if tag in selected_tags %}checked{% endif %}>
+            {{ tag }}
+          </label>
+        {% endfor %}
+      {% else %}
+        <p class="hint">No tags have been used yet. Add the first ones below.</p>
+      {% endif %}
+    </fieldset>
+    <label>
+      New tags
+      <input type="text" name="new_tags" value="{{ new_tags }}" placeholder="olivine, field-notes">
+    </label>
+    <p class="hint">Comma-separated. These are stored even if no author is verified for them.</p>
+    <button type="submit">Store document</button>
+  </form>
+</section>
+{% endblock %}

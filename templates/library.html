@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% block title %}Library{% endblock %}
+{% block main_class %}wide{% endblock %}
+{% block content %}
+<form method="get" action="/library" id="search-form">
+  <div class="library-layout">
+    <div>
+      <section class="panel">
+        <h1>Document library</h1>
+        <p class="lede">Results match content and content tags. The side panel scores them with a weighted average of the criteria you care about.</p>
+        <div class="search-row">
+          <input type="search" name="q" value="{{ q }}" placeholder="Search content or content tags">
+          <select name="tag" aria-label="Filter tag">
+            <option value="">Any tag</option>
+            {% for item in tag_options %}
+              <option value="{{ item }}" {% if item == tag %}selected{% endif %}>{{ item }}</option>
+            {% endfor %}
+          </select>
+          <select name="author" aria-label="Filter author">
+            <option value="">Any author</option>
+            {% for person in author_options %}
+              <option value="{{ person.name }}" {% if person.name == author_filter %}selected{% endif %}>{{ person.name }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit">Search</button>
+        </div>
+      </section>
+
+      {% if groups %}
+        <ul class="doc-list">
+          {% for group in groups %}
+            <li class="doc-card version-group">
+              <div>
+                <h2>{{ group.latest.title }}</h2>
+                <p class="meta">{{ group.versions|length }} version{{ '' if group.versions|length == 1 else 's' }} · original {{ group.original.upload_date.strftime("%Y-%m-%d %H:%M") }} UTC · score {{ '%.2f'|format(group.score) }}</p>
+                <ol class="versions">
+                  {% for version in group.versions|reverse %}
+                    {% set doc = version.document %}
+                    <li class="version">
+                      <div>
+                        <p class="version-label">Version {{ version.number }} · {{ doc.upload_date.strftime("%Y-%m-%d %H:%M") }} UTC{% if searching and doc.document_id in matched_ids %} · matches search{% endif %}</p>
+                        <p class="meta">{{ doc.filename }} · {{ doc.share_points }} share point{{ '' if doc.share_points == 1 else 's' }}</p>
+                        <p class="meta">
+                          Authors:
+                          {% for person in doc.authors() %}
+                            {{ person.name }}{% if person.verified %} (verified){% endif %}{% if not loop.last %}, {% endif %}
+                          {% endfor %}
+                          · {{ doc.country or "No region" }}
+                          · AI {{ "yes" if doc.ai_used else "no" }}
+                        </p>
+                        <p class="tags">
+                          {% for item in doc.tags_list() %}
+                            <span class="tag{% if item in doc.verified_tags_on_document() %} verified{% endif %}">{{ item }}{% if item in doc.verified_tags_on_document() %} verified{% endif %}</span>
+                          {% endfor %}
+                        </p>
+                        <p class="hash" title="document_id">id {{ doc.document_id }}</p>
+                        <p class="hash" title="document_hash">hash {{ doc.document_hash }}</p>
+                      </div>
+                      <div class="actions">
+                        <a class="button" href="/api/documents/{{ doc.document_id }}/file">Download</a>
+                        <a class="ghost" href="/api/documents/{{ doc.document_id }}">Metadata</a>
+                      </div>
+                    </li>
+                  {% endfor %}
+                </ol>
+              </div>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="empty">No documents match this search. Upload a PDF to start the archive.</p>
+      {% endif %}
+    </div>
+
+    <aside class="panel criteria-panel">
+      <h2>Criteria</h2>
+      <p class="hint">Weight each criterion from 0 (ignore) to 10 (essential). The score is their weighted average. Reset clears the weights only.</p>
+
+      <label>
+        Author verified
+        <select name="prefer_verified">
+          <option value="any" {% if criteria.prefer_verified == "any" %}selected{% endif %}>Either</option>
+          <option value="yes" {% if criteria.prefer_verified == "yes" %}selected{% endif %}>Yes</option>
+          <option value="no" {% if criteria.prefer_verified == "no" %}selected{% endif %}>No</option>
+        </select>
+      </label>
+      <div class="weight-line">
+        <input type="range" name="w_verified" min="0" max="10" value="{{ criteria.w_verified }}">
+        <output>{{ criteria.w_verified }}</output>
+      </div>
+
+      <label>
+        Tags verified
+        <select name="prefer_tag_verified">
+          <option value="any" {% if criteria.prefer_tag_verified == "any" %}selected{% endif %}>Either</option>
+          <option value="yes" {% if criteria.prefer_tag_verified == "yes" %}selected{% endif %}>Yes</option>
+          <option value="no" {% if criteria.prefer_tag_verified == "no" %}selected{% endif %}>No</option>
+        </select>
+      </label>
+      <div class="weight-line">
+        <input type="range" name="w_tag_verified" min="0" max="10" value="{{ criteria.w_tag_verified }}">
+        <output>{{ criteria.w_tag_verified }}</output>
+      </div>
+
+      <label>
+        Document age
+        <input type="range" name="age" min="0" max="100" value="{{ criteria.age }}" id="age-cursor">
+        <span class="hint" id="age-label">a few days</span>
+      </label>
+      <div class="weight-line">
+        <input type="range" name="w_age" min="0" max="10" value="{{ criteria.w_age }}">
+        <output>{{ criteria.w_age }}</output>
+      </div>
+
+      <label>
+        Made for
+        <select name="country">
+          <option value="">Any place</option>
+          {% for group, labels in region_groups %}
+            <optgroup label="{{ group }}">
+              {% for label in labels %}
+                <option value="{{ label }}" {% if criteria.country == label %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </optgroup>
+          {% endfor %}
+        </select>
+      </label>
+      <div class="weight-line">
+        <input type="range" name="w_country" min="0" max="10" value="{{ criteria.w_country }}">
+        <output>{{ criteria.w_country }}</output>
+      </div>
+
+      <label>
+        AI used
+        <select name="prefer_ai">
+          <option value="any" {% if criteria.prefer_ai == "any" %}selected{% endif %}>Either</option>
+          <option value="yes" {% if criteria.prefer_ai == "yes" %}selected{% endif %}>Yes</option>
+          <option value="no" {% if criteria.prefer_ai == "no" %}selected{% endif %}>No</option>
+        </select>
+      </label>
+      <div class="weight-line">
+        <input type="range" name="w_ai" min="0" max="10" value="{{ criteria.w_ai }}">
+        <output>{{ criteria.w_ai }}</output>
+      </div>
+
+      <label>Popularity (share points)</label>
+      <div class="weight-line">
+        <input type="range" name="w_popularity" min="0" max="10" value="{{ criteria.w_popularity }}">
+        <output>{{ criteria.w_popularity }}</output>
+      </div>
+
+      <button type="button" id="reset-criteria" class="ghost-button">Reset</button>
+    </aside>
+  </div>
+</form>
+<script src="/static/criteria.js"></script>
+{% endblock %}

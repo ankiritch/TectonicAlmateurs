@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Document Library{% endblock %} · TectonicAlmateurs</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="brand">
+      <a href="/library">TectonicAlmateurs</a>
+      <span class="subtitle">Internal document library</span>
+    </div>
+    <nav>
+      {% if author %}
+        <a href="/library">Library</a>
+        <a href="/upload">Upload</a>
+        <a href="/">Identity</a>
+        <span class="who">{{ author.name }}</span>
+      {% endif %}
+    </nav>
+  </header>
+  <main class="{% block main_class %}{% endblock %}">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>
