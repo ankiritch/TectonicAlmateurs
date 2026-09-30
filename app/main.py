@@ -17,7 +17,7 @@ from app.config import BASE_DIR, ensure_data_dirs, session_secret, upload_dir
 from app.db import (
     Author,
     Document,
-    all_author_tags,
+    known_content_tags,
     document_content_tags,
     get_document_by_hash,
     get_document_by_public_id,
@@ -70,6 +70,7 @@ def document_payload(document: Document) -> dict:
         "filename": document.filename,
         "title": document.title,
         "content_tags": document.tags_list(),
+        "verified_content_tags": document.verified_tags_on_document(),
         "country": document.country,
         "ai_used": document.ai_used,
         "pdf_metadata": document.metadata_dict(),
@@ -82,6 +83,7 @@ def document_payload(document: Document) -> dict:
                 "id": author.id,
                 "name": author.name,
                 "content_tags": author.tags_list(),
+                "verified_tags": author.verified_tags_list(),
                 "verified": author.verified,
             }
             for author in document.authors()
@@ -93,10 +95,11 @@ def document_payload(document: Document) -> dict:
 def upload_context(author: Author, db: Session, extra: dict | None = None) -> dict:
     context = {
         "author": author,
-        "available_tags": all_author_tags(db),
+        "available_tags": known_content_tags(db),
         "selected_tags": author.tags_list(),
         "region_groups": grouped_regions(),
         "selected_country": "Worldwide",
+        "new_tags": "",
         "ai_used": False,
     }
     if extra:
@@ -113,6 +116,7 @@ def identity_page(request: Request, db: Session = Depends(get_session)):
         {
             "author": author,
             "tag_value": ", ".join(author.tags_list()) if author else "",
+            "verified_tag_value": ", ".join(author.verified_tags_list()) if author else "",
         },
     )
 
@@ -122,16 +126,29 @@ def submit_identity(
     request: Request,
     name: str = Form(...),
     content_tags: str = Form(""),
+    verified_tags: str = Form(""),
     verified: str = Form(""),
     db: Session = Depends(get_session),
 ):
     try:
-        author = identify_author(db, name, parse_tags(content_tags), verified=verified == "yes")
+        author = identify_author(
+            db,
+            name,
+            parse_tags(content_tags),
+            verified=verified == "yes",
+            verified_tags=parse_tags(verified_tags),
+        )
     except ValueError as exc:
         return templates.TemplateResponse(
             request,
             "identity.html",
-            {"author": None, "tag_value": content_tags, "error": str(exc), "name_value": name},
+            {
+                "author": None,
+                "tag_value": content_tags,
+                "verified_tag_value": verified_tags,
+                "error": str(exc),
+                "name_value": name,
+            },
             status_code=400,
         )
     set_author_session(request, author)
@@ -148,15 +165,19 @@ def read_criteria(
     age: int = 0,
     country: str = "",
     prefer_ai: str = "any",
+    w_tag_verified: int = 0,
+    prefer_tag_verified: str = "any",
 ) -> SearchCriteria:
     region = canonical_region(country) or ""
     return SearchCriteria(
         w_verified=clamp_weight(w_verified),
+        w_tag_verified=clamp_weight(w_tag_verified),
         w_age=clamp_weight(w_age),
         w_country=clamp_weight(w_country),
         w_ai=clamp_weight(w_ai),
         w_popularity=clamp_weight(w_popularity),
         prefer_verified=choice(prefer_verified, {"yes", "no", "any"}, "any"),
+        prefer_tag_verified=choice(prefer_tag_verified, {"yes", "no", "any"}, "any"),
         age=clamp_age(age),
         country=region,
         prefer_ai=choice(prefer_ai, {"yes", "no", "any"}, "any"),
@@ -178,6 +199,8 @@ def library_page(
     age: int = 0,
     country: str = "",
     prefer_ai: str = "any",
+    w_tag_verified: int = 0,
+    prefer_tag_verified: str = "any",
     db: Session = Depends(get_session),
 ):
     current = current_author(request, db)
@@ -186,6 +209,7 @@ def library_page(
     criteria = read_criteria(
         w_verified, w_age, w_country, w_ai, w_popularity,
         prefer_verified, age, country, prefer_ai,
+        w_tag_verified, prefer_tag_verified,
     )
     documents = search_documents(
         db, query=q, tag=tag or None, author=author or None, criteria=criteria
@@ -219,6 +243,7 @@ def upload_page(request: Request, db: Session = Depends(get_session)):
 async def upload_from_form(
     request: Request,
     content_tags: list[str] = Form(default=[]),
+    new_tags: str = Form(""),
     country: str = Form("Worldwide"),
     ai_used: str = Form("no"),
     file: UploadFile = File(...),
@@ -227,9 +252,10 @@ async def upload_from_form(
     current = current_author(request, db)
     if current is None:
         return RedirectResponse("/", status_code=303)
+    selected = list(content_tags) + parse_tags(new_tags)
     try:
         document = await store_upload(
-            file, current, content_tags, db, country=country, ai_used=ai_used == "yes"
+            file, current, selected, db, country=country, ai_used=ai_used == "yes"
         )
     except HttpishError as exc:
         return templates.TemplateResponse(
@@ -240,7 +266,8 @@ async def upload_from_form(
                 db,
                 {
                     "error": exc.detail,
-                    "selected_tags": content_tags,
+                    "selected_tags": selected,
+                    "new_tags": new_tags,
                     "selected_country": country,
                     "ai_used": ai_used == "yes",
                 },
@@ -264,12 +291,15 @@ def api_search(
     age: int = 0,
     country: str = "",
     prefer_ai: str = "any",
+    w_tag_verified: int = 0,
+    prefer_tag_verified: str = "any",
     db: Session = Depends(get_session),
     _user: Author = Depends(require_author),
 ):
     criteria = read_criteria(
         w_verified, w_age, w_country, w_ai, w_popularity,
         prefer_verified, age, country, prefer_ai,
+        w_tag_verified, prefer_tag_verified,
     )
     documents = search_documents(
         db, query=q, tag=tag or None, author=author or None, criteria=criteria
@@ -314,13 +344,14 @@ def api_download(
 async def api_upload(
     content_tags: list[str] = Form(default=[]),
     extra_tags: str = Form(""),
+    new_tags: str = Form(""),
     country: str = Form("Worldwide"),
     ai_used: str = Form("no"),
     file: UploadFile = File(...),
     db: Session = Depends(get_session),
     author: Author = Depends(require_author),
 ):
-    tags = list(content_tags) + parse_tags(extra_tags)
+    tags = list(content_tags) + parse_tags(extra_tags) + parse_tags(new_tags)
     try:
         document = await store_upload(
             file, author, tags, db, country=country, ai_used=ai_used == "yes"

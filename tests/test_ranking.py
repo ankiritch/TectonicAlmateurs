@@ -5,8 +5,12 @@ from app.regions import region_match
 
 
 class _Author:
-    def __init__(self, verified: bool):
+    def __init__(self, verified: bool = False, verified_tags: list[str] | None = None):
         self.verified = verified
+        self._verified_tags = verified_tags or []
+
+    def verified_tags_list(self):
+        return self._verified_tags
 
 
 class _Doc:
@@ -16,9 +20,13 @@ class _Doc:
         self.country = kwargs.get("country", "")
         self.ai_used = kwargs.get("ai_used", False)
         self._authors = kwargs.get("authors", [])
+        self._tags = kwargs.get("tags", [])
 
     def authors(self):
         return self._authors
+
+    def tags_list(self):
+        return self._tags
 
 
 def test_region_match_country_inside_continent():

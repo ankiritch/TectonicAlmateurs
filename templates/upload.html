@@ -3,7 +3,7 @@
 {% block content %}
 <section class="panel">
   <h1>Upload a PDF</h1>
-  <p class="lede">Choose content tags from authors who are considered reliable for those topics. Label where the document is made for, and whether AI was used. If this PDF already has a document_id, an unchanged file adds you to its author chain; a changed file becomes a new document that keeps that chain.</p>
+  <p class="lede">Pick existing content tags or type new ones. A tag does not need an expert before you can use it. Label where the document is made for, and whether AI was used. If this PDF already has a document_id, an unchanged file adds you to its author chain; a changed file becomes a new document that keeps that chain.</p>
   {% if error %}
     <p class="error">{{ error }}</p>
   {% endif %}
@@ -45,9 +45,14 @@
           </label>
         {% endfor %}
       {% else %}
-        <p class="hint">No author content tags exist yet. Add some on the identity page.</p>
+        <p class="hint">No tags have been used yet. Add the first ones below.</p>
       {% endif %}
     </fieldset>
+    <label>
+      New tags
+      <input type="text" name="new_tags" value="{{ new_tags }}" placeholder="olivine, field-notes">
+    </label>
+    <p class="hint">Comma-separated. These are stored even if no author is verified for them.</p>
     <button type="submit">Store document</button>
   </form>
 </section>

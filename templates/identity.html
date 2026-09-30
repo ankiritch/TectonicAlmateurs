@@ -16,11 +16,15 @@
       Content tags
       <input type="text" name="content_tags" placeholder="geology, internal-memo, q3" value="{{ tag_value }}">
     </label>
+    <label>
+      Verified tags
+      <input type="text" name="verified_tags" placeholder="geology" value="{{ verified_tag_value or '' }}">
+    </label>
     <label class="check">
       <input type="checkbox" name="verified" value="yes" {% if author and author.verified %}checked{% endif %}>
       Verified author
     </label>
-    <p class="hint">Separate tags with commas. Verified is a flag search can weight. Tags describe domains of reliability, not a single document.</p>
+    <p class="hint">Separate tags with commas. Verified tags are the topics you are verified for, and they are added to your content tags if you left them out. The author flag is separate. Documents can still use tags that no expert has claimed yet.</p>
     <button type="submit">Continue to library</button>
   </form>
 </section>

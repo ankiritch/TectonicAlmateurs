@@ -29,11 +29,13 @@ MAX_AGE_DAYS = 30 * 365.25
 @dataclass
 class SearchCriteria:
     w_verified: int = 0
+    w_tag_verified: int = 0
     w_age: int = 0
     w_country: int = 0
     w_ai: int = 0
     w_popularity: int = 0
     prefer_verified: str = "any"
+    prefer_tag_verified: str = "any"
     age: int = 0
     country: str = ""
     prefer_ai: str = "any"
@@ -108,6 +110,25 @@ def verified_score(document: Document, prefer: str) -> float:
     return 0.0
 
 
+def tag_verification_score(document: Document, prefer: str) -> float:
+    """Share of the document's tags that some author on the chain is verified for."""
+    tags = [tag for tag in document.tags_list() if tag.casefold() != "ai"]
+    if not tags:
+        covered = 0.0
+    else:
+        verified = {
+            tag.casefold()
+            for author in document.authors()
+            for tag in author.verified_tags_list()
+        }
+        covered = sum(1 for tag in tags if tag.casefold() in verified) / len(tags)
+    if prefer == "yes":
+        return covered
+    if prefer == "no":
+        return 1.0 - covered
+    return 0.0
+
+
 def ai_score(document: Document, prefer: str) -> float:
     used = bool(document.ai_used)
     if prefer == "yes":
@@ -129,6 +150,7 @@ def linear_score(
         popularity = document.share_points / max_share_points
     terms = [
         (criteria.w_verified, verified_score(document, criteria.prefer_verified)),
+        (criteria.w_tag_verified, tag_verification_score(document, criteria.prefer_tag_verified)),
         (criteria.w_age, _age_closeness(_document_age_days(document, now), target_age_days(criteria.age))),
         (criteria.w_country, region_match(document.country or "", criteria.country)),
         (criteria.w_ai, ai_score(document, criteria.prefer_ai)),

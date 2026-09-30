@@ -43,7 +43,7 @@
                 </p>
                 <p class="tags">
                   {% for item in doc.tags_list() %}
-                    <span class="tag">{{ item }}</span>
+                    <span class="tag{% if item in doc.verified_tags_on_document() %} verified{% endif %}">{{ item }}{% if item in doc.verified_tags_on_document() %} verified{% endif %}</span>
                   {% endfor %}
                 </p>
                 <p class="hash" title="document_id">id {{ doc.document_id }}</p>
@@ -76,6 +76,19 @@
       <div class="weight-line">
         <input type="range" name="w_verified" min="0" max="10" value="{{ criteria.w_verified }}">
         <output>{{ criteria.w_verified }}</output>
+      </div>
+
+      <label>
+        Tags verified
+        <select name="prefer_tag_verified">
+          <option value="any" {% if criteria.prefer_tag_verified == "any" %}selected{% endif %}>Either</option>
+          <option value="yes" {% if criteria.prefer_tag_verified == "yes" %}selected{% endif %}>Yes</option>
+          <option value="no" {% if criteria.prefer_tag_verified == "no" %}selected{% endif %}>No</option>
+        </select>
+      </label>
+      <div class="weight-line">
+        <input type="range" name="w_tag_verified" min="0" max="10" value="{{ criteria.w_tag_verified }}">
+        <output>{{ criteria.w_tag_verified }}</output>
       </div>
 
       <label>

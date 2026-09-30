@@ -104,15 +104,17 @@ def test_rejects_non_pdf(client: TestClient):
     assert response.status_code == 400
 
 
-def test_rejects_unknown_content_tags(client: TestClient):
-    identify(client)
+def test_accepts_tags_without_an_expert(client: TestClient):
+    identify(client, name="Ada Geologist", tags="basalt")
     pdf = build_pdf(title="Memo", body="notes")
     response = client.post(
         "/api/documents",
         files={"file": ("memo.pdf", pdf, "application/pdf")},
-        data={"content_tags": "not-a-real-tag"},
+        data={"new_tags": "olivine, field-notes"},
     )
-    assert response.status_code == 400
+    assert response.status_code == 200, response.text
+    assert response.json()["content_tags"] == ["olivine", "field-notes"]
+    assert response.json()["verified_content_tags"] == []
 
 
 def test_same_document_id_adds_author_when_hash_matches(client: TestClient):
@@ -260,3 +262,34 @@ def test_weighted_verified_country_and_ai(client: TestClient):
     assert "AI" in verified.json()["content_tags"]
     assert verified.json()["country"] == "France"
     assert verified.json()["ai_used"] is True
+
+
+def test_per_tag_verification_ranks_covered_tags(client: TestClient):
+    client.post(
+        "/auth",
+        data={
+            "name": "Ada Geologist",
+            "content_tags": "basalt, maps",
+            "verified_tags": "basalt",
+        },
+        follow_redirects=False,
+    )
+    covered = client.post(
+        "/api/documents",
+        files={"file": ("covered.pdf", build_pdf(title="Covered Note", body="shared ledge"), "application/pdf")},
+        data={"new_tags": "basalt"},
+    )
+    identify(client, name="Bea Mapper", tags="")
+    bare = client.post(
+        "/api/documents",
+        files={"file": ("bare.pdf", build_pdf(title="Bare Note", body="shared ledge", extra_pages=1), "application/pdf")},
+        data={"new_tags": "olivine"},
+    )
+    ranked = client.get(
+        "/api/documents",
+        params={"q": "ledge", "prefer_tag_verified": "yes", "w_tag_verified": 10},
+    )
+    assert ranked.json()[0]["document_id"] == covered.json()["document_id"]
+    assert "basalt" in ranked.json()[0]["verified_content_tags"]
+    assert bare.json()["verified_content_tags"] == []
+    assert ranked.json()[0]["authors"][0]["verified_tags"] == ["basalt"]

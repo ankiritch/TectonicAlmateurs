@@ -6,6 +6,8 @@
   const FIELDS = [
     "prefer_verified",
     "w_verified",
+    "prefer_tag_verified",
+    "w_tag_verified",
     "age",
     "w_age",
     "country",
@@ -61,9 +63,10 @@
   }
 
   function isDefault(data) {
-    const weights = ["w_verified", "w_age", "w_country", "w_ai", "w_popularity", "age"];
+    const weights = ["w_verified", "w_tag_verified", "w_age", "w_country", "w_ai", "w_popularity", "age"];
     return (
       (data.prefer_verified || "any") === "any" &&
+      (data.prefer_tag_verified || "any") === "any" &&
       (data.prefer_ai || "any") === "any" &&
       !data.country &&
       weights.every(function (name) {
@@ -104,6 +107,8 @@
       write({
         prefer_verified: "any",
         w_verified: "0",
+        prefer_tag_verified: "any",
+        w_tag_verified: "0",
         age: "0",
         w_age: "0",
         country: "",

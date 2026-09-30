@@ -45,6 +45,7 @@ class Author(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     name_key: Mapped[str] = mapped_column(String(200), nullable=False)
     content_tags: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    verified_tags: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -55,13 +56,10 @@ class Author(Base):
     document_links: Mapped[list["DocumentAuthor"]] = relationship(back_populates="author")
 
     def tags_list(self) -> list[str]:
-        try:
-            value = json.loads(self.content_tags)
-        except json.JSONDecodeError:
-            return []
-        if not isinstance(value, list):
-            return []
-        return [str(item) for item in value]
+        return _json_list(self.content_tags)
+
+    def verified_tags_list(self) -> list[str]:
+        return _json_list(self.verified_tags)
 
 
 class DocumentAuthor(Base):
@@ -105,13 +103,14 @@ class Document(Base):
     predecessor: Mapped["Document | None"] = relationship(remote_side=[id])
 
     def tags_list(self) -> list[str]:
-        try:
-            value = json.loads(self.content_tags)
-        except json.JSONDecodeError:
-            return []
-        if not isinstance(value, list):
-            return []
-        return [str(item) for item in value]
+        return _json_list(self.content_tags)
+
+    def verified_tags_on_document(self) -> list[str]:
+        verified = set()
+        for author in self.authors():
+            for tag in author.verified_tags_list():
+                verified.add(tag.casefold())
+        return [tag for tag in self.tags_list() if tag.casefold() in verified]
 
     def metadata_dict(self) -> dict[str, Any]:
         try:
@@ -180,6 +179,7 @@ def init_db() -> None:
     with eng.begin() as conn:
         conn.execute(text(FTS_DDL))
         _ensure_column(conn, "authors", "verified", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "authors", "verified_tags", "TEXT NOT NULL DEFAULT '[]'")
         _ensure_column(conn, "documents", "country", "VARCHAR(80) NOT NULL DEFAULT ''")
         _ensure_column(conn, "documents", "ai_used", "INTEGER NOT NULL DEFAULT 0")
 
@@ -214,6 +214,16 @@ def tags_to_json(tags: list[str]) -> str:
     return json.dumps(cleaned)
 
 
+def _json_list(raw: str) -> list[str]:
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value]
+
+
 def parse_tags(raw: str | None) -> list[str]:
     if not raw:
         return []
@@ -235,27 +245,24 @@ def all_author_tags(db) -> list[str]:
     return merged
 
 
-def allowed_tag_map(db) -> dict[str, str]:
-    return {tag.casefold(): tag for tag in all_author_tags(db)}
+def known_content_tags(db) -> list[str]:
+    seen: dict[str, str] = {}
+    for tag in all_author_tags(db) + document_content_tags(db):
+        if tag.casefold() == "ai":
+            continue
+        seen.setdefault(tag.casefold(), tag)
+    return sorted(seen.values(), key=str.casefold)
 
 
 def validate_content_tags(db, tags: list[str]) -> list[str]:
-    allowed = allowed_tag_map(db)
-    if not allowed and tags:
-        raise ValueError("No author content tags exist yet. Set tags on an author identity first.")
+    """Keep any tag. Reuse the existing spelling when the tag is already known."""
+    known = {tag.casefold(): tag for tag in known_content_tags(db)}
     resolved = []
-    unknown = []
     for tag in json.loads(tags_to_json(tags)):
-        canonical = allowed.get(tag.casefold())
-        if canonical is None:
-            unknown.append(tag)
-        else:
-            resolved.append(canonical)
-    if unknown:
-        raise ValueError(
-            "Content tags must come from an existing author. Unknown: " + ", ".join(unknown)
-        )
-    return resolved
+        if tag.casefold() == "ai":
+            continue
+        resolved.append(known.get(tag.casefold(), tag))
+    return json.loads(tags_to_json(resolved))
 
 
 def reset_engine() -> None:
