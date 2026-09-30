@@ -162,6 +162,27 @@ def test_changed_file_keeps_author_chain_with_new_id(client: TestClient):
     assert second.json()["content_tags"] == ["maps"]
 
 
+def test_same_content_without_document_id_adds_author(client: TestClient):
+    identify(client, name="Ada Geologist", tags="basalt")
+    pdf = build_pdf(title="Unstamped Report", body="field notes")
+    first = client.post(
+        "/api/documents",
+        files={"file": ("unstamped.pdf", pdf, "application/pdf")},
+        data={"content_tags": "basalt"},
+    )
+    assert first.status_code == 200, first.text
+    identify(client, name="Bea Mapper", tags="maps")
+    second = client.post(
+        "/api/documents",
+        files={"file": ("unstamped.pdf", pdf, "application/pdf")},
+        data={"content_tags": "maps"},
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["document_id"] == first.json()["document_id"]
+    names = [item["name"] for item in second.json()["authors"]]
+    assert names == ["Ada Geologist", "Bea Mapper"]
+
+
 def test_search_ranks_by_share_points(client: TestClient):
     identify(client, tags="basalt")
     first = client.post(
@@ -171,7 +192,7 @@ def test_search_ranks_by_share_points(client: TestClient):
     )
     second = client.post(
         "/api/documents",
-        files={"file": ("b.pdf", build_pdf(title="Beta Note", body="shared topic"), "application/pdf")},
+        files={"file": ("b.pdf", build_pdf(title="Beta Note", body="shared topic", extra_pages=1), "application/pdf")},
         data={"content_tags": "basalt"},
     )
     client.get(f"/api/documents/{second.json()['document_id']}/file")

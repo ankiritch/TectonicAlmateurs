@@ -29,6 +29,7 @@ pytest
 - Upload: PDF only; you pick content tags from existing authors. The PDF is stamped with `document_id` and `document_hash`
 - Same `document_id` and hash: the uploader is added to the document’s author list
 - Same `document_id` but a different hash: a new document is stored (new id, hash, upload date, tags) with the previous author chain
+- If `document_id` is missing but the content hash uniquely matches, the uploader is still added to that author list
 - Server record: authors, `document_hash`, `document_id`, `upload_date`, content tags, share points
 - Search: match content and content tags, then rank by share points (see `app/ranking.py` to plug in trustworthiness later)
 - Download: awards one share point

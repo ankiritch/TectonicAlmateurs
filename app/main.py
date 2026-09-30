@@ -18,6 +18,7 @@ from app.db import (
     Author,
     Document,
     all_author_tags,
+    get_document_by_hash,
     get_document_by_public_id,
     get_session,
     init_db,
@@ -221,7 +222,7 @@ def api_download(
     return FileResponse(
         path,
         media_type="application/pdf",
-        filename=document.filename,
+        filename=f"{Path(document.filename).stem}-{document.document_id}.pdf",
     )
 
 
@@ -288,6 +289,8 @@ async def store_upload(
     title = info.get("Title") or Path(filename).stem
     incoming_id = (info.get("document_id") or "").strip()
     existing = get_document_by_public_id(db, incoming_id) if incoming_id else None
+    if existing is None:
+        existing = get_document_by_hash(db, incoming_hash)
 
     if existing is not None and existing.document_hash == incoming_hash:
         chain = existing.authors()

@@ -306,6 +306,20 @@ def get_document_by_public_id(db, document_id: str) -> Document | None:
     ).scalar_one_or_none()
 
 
+def get_document_by_hash(db, document_hash: str) -> Document | None:
+    rows = (
+        db.execute(
+            select(Document).options(*DOCUMENT_LOAD).where(Document.document_hash == document_hash)
+        )
+        .unique()
+        .scalars()
+        .all()
+    )
+    if len(rows) == 1:
+        return rows[0]
+    return None
+
+
 def search_documents(db, query: str = "", tag: str | None = None, author: str | None = None):
     stmt = select(Document).options(*DOCUMENT_LOAD)
     if query.strip():
