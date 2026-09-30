@@ -18,10 +18,12 @@ from app.db import (
     Author,
     Document,
     all_author_tags,
+    document_content_tags,
     get_document_by_hash,
     get_document_by_public_id,
     get_session,
     init_db,
+    list_authors,
     parse_tags,
     search_documents,
     set_author_chain,
@@ -29,6 +31,8 @@ from app.db import (
     upsert_fts,
     validate_content_tags,
 )
+from app.ranking import SearchCriteria, choice, clamp_age, clamp_weight
+from app.regions import canonical_region, grouped_regions
 from app.pdf_utils import (
     PdfProcessingError,
     apply_metadata,
@@ -66,15 +70,19 @@ def document_payload(document: Document) -> dict:
         "filename": document.filename,
         "title": document.title,
         "content_tags": document.tags_list(),
+        "country": document.country,
+        "ai_used": document.ai_used,
         "pdf_metadata": document.metadata_dict(),
         "upload_date": document.upload_date.isoformat(),
         "share_points": document.share_points,
+        "rank_score": round(getattr(document, "rank_score", 0.0), 4),
         "predecessor_id": document.predecessor.document_id if document.predecessor else None,
         "authors": [
             {
                 "id": author.id,
                 "name": author.name,
                 "content_tags": author.tags_list(),
+                "verified": author.verified,
             }
             for author in document.authors()
         ],
@@ -87,6 +95,9 @@ def upload_context(author: Author, db: Session, extra: dict | None = None) -> di
         "author": author,
         "available_tags": all_author_tags(db),
         "selected_tags": author.tags_list(),
+        "region_groups": grouped_regions(),
+        "selected_country": "Worldwide",
+        "ai_used": False,
     }
     if extra:
         context.update(extra)
@@ -111,10 +122,11 @@ def submit_identity(
     request: Request,
     name: str = Form(...),
     content_tags: str = Form(""),
+    verified: str = Form(""),
     db: Session = Depends(get_session),
 ):
     try:
-        author = identify_author(db, name, parse_tags(content_tags))
+        author = identify_author(db, name, parse_tags(content_tags), verified=verified == "yes")
     except ValueError as exc:
         return templates.TemplateResponse(
             request,
@@ -126,18 +138,58 @@ def submit_identity(
     return RedirectResponse("/library", status_code=303)
 
 
+def read_criteria(
+    w_verified: int = 0,
+    w_age: int = 0,
+    w_country: int = 0,
+    w_ai: int = 0,
+    w_popularity: int = 0,
+    prefer_verified: str = "any",
+    age: int = 0,
+    country: str = "",
+    prefer_ai: str = "any",
+) -> SearchCriteria:
+    region = canonical_region(country) or ""
+    return SearchCriteria(
+        w_verified=clamp_weight(w_verified),
+        w_age=clamp_weight(w_age),
+        w_country=clamp_weight(w_country),
+        w_ai=clamp_weight(w_ai),
+        w_popularity=clamp_weight(w_popularity),
+        prefer_verified=choice(prefer_verified, {"yes", "no", "any"}, "any"),
+        age=clamp_age(age),
+        country=region,
+        prefer_ai=choice(prefer_ai, {"yes", "no", "any"}, "any"),
+    )
+
+
 @app.get("/library", response_class=HTMLResponse)
 def library_page(
     request: Request,
     q: str = "",
     tag: str = "",
     author: str = "",
+    w_verified: int = 0,
+    w_age: int = 0,
+    w_country: int = 0,
+    w_ai: int = 0,
+    w_popularity: int = 0,
+    prefer_verified: str = "any",
+    age: int = 0,
+    country: str = "",
+    prefer_ai: str = "any",
     db: Session = Depends(get_session),
 ):
     current = current_author(request, db)
     if current is None:
         return RedirectResponse("/", status_code=303)
-    documents = search_documents(db, query=q, tag=tag or None, author=author or None)
+    criteria = read_criteria(
+        w_verified, w_age, w_country, w_ai, w_popularity,
+        prefer_verified, age, country, prefer_ai,
+    )
+    documents = search_documents(
+        db, query=q, tag=tag or None, author=author or None, criteria=criteria
+    )
     return templates.TemplateResponse(
         request,
         "library.html",
@@ -147,6 +199,10 @@ def library_page(
             "q": q,
             "tag": tag,
             "author_filter": author,
+            "criteria": criteria,
+            "tag_options": document_content_tags(db),
+            "author_options": list_authors(db),
+            "region_groups": grouped_regions(),
         },
     )
 
@@ -163,6 +219,8 @@ def upload_page(request: Request, db: Session = Depends(get_session)):
 async def upload_from_form(
     request: Request,
     content_tags: list[str] = Form(default=[]),
+    country: str = Form("Worldwide"),
+    ai_used: str = Form("no"),
     file: UploadFile = File(...),
     db: Session = Depends(get_session),
 ):
@@ -170,12 +228,23 @@ async def upload_from_form(
     if current is None:
         return RedirectResponse("/", status_code=303)
     try:
-        document = await store_upload(file, current, content_tags, db)
+        document = await store_upload(
+            file, current, content_tags, db, country=country, ai_used=ai_used == "yes"
+        )
     except HttpishError as exc:
         return templates.TemplateResponse(
             request,
             "upload.html",
-            upload_context(current, db, {"error": exc.detail, "selected_tags": content_tags}),
+            upload_context(
+                current,
+                db,
+                {
+                    "error": exc.detail,
+                    "selected_tags": content_tags,
+                    "selected_country": country,
+                    "ai_used": ai_used == "yes",
+                },
+            ),
             status_code=exc.status_code,
         )
     return RedirectResponse(f"/library?q={document.title}", status_code=303)
@@ -186,10 +255,25 @@ def api_search(
     q: str = "",
     tag: str = "",
     author: str = "",
+    w_verified: int = 0,
+    w_age: int = 0,
+    w_country: int = 0,
+    w_ai: int = 0,
+    w_popularity: int = 0,
+    prefer_verified: str = "any",
+    age: int = 0,
+    country: str = "",
+    prefer_ai: str = "any",
     db: Session = Depends(get_session),
     _user: Author = Depends(require_author),
 ):
-    documents = search_documents(db, query=q, tag=tag or None, author=author or None)
+    criteria = read_criteria(
+        w_verified, w_age, w_country, w_ai, w_popularity,
+        prefer_verified, age, country, prefer_ai,
+    )
+    documents = search_documents(
+        db, query=q, tag=tag or None, author=author or None, criteria=criteria
+    )
     return [document_payload(item) for item in documents]
 
 
@@ -230,13 +314,17 @@ def api_download(
 async def api_upload(
     content_tags: list[str] = Form(default=[]),
     extra_tags: str = Form(""),
+    country: str = Form("Worldwide"),
+    ai_used: str = Form("no"),
     file: UploadFile = File(...),
     db: Session = Depends(get_session),
     author: Author = Depends(require_author),
 ):
     tags = list(content_tags) + parse_tags(extra_tags)
     try:
-        document = await store_upload(file, author, tags, db)
+        document = await store_upload(
+            file, author, tags, db, country=country, ai_used=ai_used == "yes"
+        )
     except HttpishError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     return document_payload(document)
@@ -254,11 +342,20 @@ def _extract_search_text(data: bytes, info: dict[str, str]) -> str:
     return "\n".join(part for part in [page_text, " ".join(info.values())] if part)
 
 
+def _with_ai_tag(tags: list[str], ai_used: bool) -> list[str]:
+    kept = [tag for tag in tags if tag.casefold() != "ai"]
+    if ai_used:
+        kept.append("AI")
+    return kept
+
+
 async def store_upload(
     file: UploadFile,
     author: Author,
     selected_tags: list[str],
     db: Session,
+    country: str = "Worldwide",
+    ai_used: bool = False,
 ) -> Document:
     filename = Path(file.filename or "document.pdf").name
     if not filename.lower().endswith(".pdf"):
@@ -281,8 +378,11 @@ async def store_upload(
     except PdfProcessingError as exc:
         raise HttpishError(400, str(exc)) from exc
 
+    region = canonical_region(country)
+    if region is None:
+        raise HttpishError(400, "Choose a country, a continent, or Worldwide.")
     try:
-        tags = validate_content_tags(db, selected_tags)
+        tags = _with_ai_tag(validate_content_tags(db, selected_tags), ai_used)
     except ValueError as exc:
         raise HttpishError(400, str(exc)) from exc
 
@@ -320,6 +420,8 @@ async def store_upload(
         tags=tags,
         document_id=public_id,
         document_hash=incoming_hash,
+        country=region,
+        ai_used=ai_used,
     )
     stored_name = f"{public_id}.pdf"
     stored_path = upload_dir() / stored_name
@@ -333,6 +435,8 @@ async def store_upload(
         stored_path=str(stored_path),
         title=title,
         content_tags=tags_to_json(tags),
+        country=region,
+        ai_used=ai_used,
         pdf_metadata=json.dumps(stored_info),
         extracted_text=body_text,
         predecessor=predecessor,

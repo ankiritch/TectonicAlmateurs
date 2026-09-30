@@ -21,7 +21,7 @@ def set_author_session(request: Request, author: Author) -> None:
     request.session[SESSION_AUTHOR_KEY] = author.id
 
 
-def identify_author(db: Session, name: str, tags: list[str]) -> Author:
+def identify_author(db: Session, name: str, tags: list[str], verified: bool = False) -> Author:
     cleaned_name = " ".join(name.strip().split())
     if not cleaned_name:
         raise ValueError("Name is required.")
@@ -32,11 +32,13 @@ def identify_author(db: Session, name: str, tags: list[str]) -> Author:
             name=cleaned_name,
             name_key=name_key,
             content_tags=tags_to_json(tags),
+            verified=verified,
         )
         db.add(author)
     else:
         author.name = cleaned_name
         author.content_tags = tags_to_json(tags)
+        author.verified = verified
     db.commit()
     db.refresh(author)
     return author

@@ -195,9 +195,68 @@ def test_search_ranks_by_share_points(client: TestClient):
         files={"file": ("b.pdf", build_pdf(title="Beta Note", body="shared topic", extra_pages=1), "application/pdf")},
         data={"content_tags": "basalt"},
     )
-    client.get(f"/api/documents/{second.json()['document_id']}/file")
-    client.get(f"/api/documents/{second.json()['document_id']}/file")
-    ranked = client.get("/api/documents", params={"q": "shared"})
+    client.get(f"/api/documents/{first.json()['document_id']}/file")
+    client.get(f"/api/documents/{first.json()['document_id']}/file")
+    neutral = client.get("/api/documents", params={"q": "shared"})
+    assert [item["document_id"] for item in neutral.json()][0] == second.json()["document_id"]
+    ranked = client.get("/api/documents", params={"q": "shared", "w_popularity": 10})
     ids = [item["document_id"] for item in ranked.json()]
-    assert ids[0] == second.json()["document_id"]
-    assert first.json()["document_id"] in ids
+    assert ids[0] == first.json()["document_id"]
+    assert ranked.json()[0]["rank_score"] > ranked.json()[1]["rank_score"]
+
+
+def test_filters_only_existing_tags_and_authors(client: TestClient):
+    identify(client, name="Ada Geologist", tags="basalt")
+    client.post(
+        "/api/documents",
+        files={"file": ("a.pdf", build_pdf(title="Tagged", body="notes"), "application/pdf")},
+        data={"content_tags": "basalt"},
+    )
+    page = client.get("/library")
+    assert '<select name="tag"' in page.text
+    assert '<select name="author"' in page.text
+    assert ">basalt<" in page.text
+    assert ">Ada Geologist<" in page.text
+    assert 'type="text" name="tag"' not in page.text
+    missing = client.get("/api/documents", params={"tag": "not-a-real-tag"})
+    assert missing.json() == []
+    unknown_author = client.get("/api/documents", params={"author": "Nobody"})
+    assert unknown_author.json() == []
+
+
+def test_weighted_verified_country_and_ai(client: TestClient):
+    identify(client, name="Ada Geologist", tags="basalt")
+    client.post(
+        "/auth",
+        data={"name": "Ada Geologist", "content_tags": "basalt", "verified": "yes"},
+        follow_redirects=False,
+    )
+    verified = client.post(
+        "/api/documents",
+        files={"file": ("ada.pdf", build_pdf(title="Ada Note", body="shared quarry"), "application/pdf")},
+        data={"content_tags": "basalt", "country": "France", "ai_used": "yes"},
+    )
+    identify(client, name="Bea Mapper", tags="basalt")
+    other = client.post(
+        "/api/documents",
+        files={"file": ("bea.pdf", build_pdf(title="Bea Note", body="shared quarry", extra_pages=1), "application/pdf")},
+        data={"content_tags": "basalt", "country": "Japan", "ai_used": "no"},
+    )
+    by_verified = client.get(
+        "/api/documents",
+        params={"q": "quarry", "prefer_verified": "yes", "w_verified": 10},
+    )
+    assert by_verified.json()[0]["document_id"] == verified.json()["document_id"]
+    by_country = client.get(
+        "/api/documents",
+        params={"q": "quarry", "country": "Japan", "w_country": 10},
+    )
+    assert by_country.json()[0]["document_id"] == other.json()["document_id"]
+    by_ai = client.get(
+        "/api/documents",
+        params={"q": "quarry", "prefer_ai": "no", "w_ai": 10},
+    )
+    assert by_ai.json()[0]["document_id"] == other.json()["document_id"]
+    assert "AI" in verified.json()["content_tags"]
+    assert verified.json()["country"] == "France"
+    assert verified.json()["ai_used"] is True

@@ -16,7 +16,11 @@
       Content tags
       <input type="text" name="content_tags" placeholder="geology, internal-memo, q3" value="{{ tag_value }}">
     </label>
-    <p class="hint">Separate tags with commas. Tags describe domains of reliability, not a single document.</p>
+    <label class="check">
+      <input type="checkbox" name="verified" value="yes" {% if author and author.verified %}checked{% endif %}>
+      Verified author
+    </label>
+    <p class="hint">Separate tags with commas. Verified is a flag search can weight. Tags describe domains of reliability, not a single document.</p>
     <button type="submit">Continue to library</button>
   </form>
 </section>

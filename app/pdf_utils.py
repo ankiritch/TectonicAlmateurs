@@ -91,6 +91,8 @@ def apply_metadata(
     tags: list[str],
     document_id: str,
     document_hash: str,
+    country: str = "",
+    ai_used: bool = False,
 ) -> bytes:
     try:
         reader = PdfReader(BytesIO(data))
@@ -103,6 +105,8 @@ def apply_metadata(
                 "/Keywords": ", ".join(tags),
                 "/document_id": document_id,
                 "/document_hash": document_hash,
+                "/Country": country,
+                "/AIUsed": "yes" if ai_used else "no",
                 "/Producer": "TectonicAlmateurs",
             }
         )

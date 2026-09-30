@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     Integer,
@@ -29,7 +30,7 @@ from sqlalchemy.orm import (
 )
 
 from app.config import db_path, ensure_data_dirs
-from app.ranking import rank_documents
+from app.ranking import SearchCriteria, rank_documents
 
 
 class Base(DeclarativeBase):
@@ -44,6 +45,7 @@ class Author(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     name_key: Mapped[str] = mapped_column(String(200), nullable=False)
     content_tags: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -83,6 +85,8 @@ class Document(Base):
     stored_path: Mapped[str] = mapped_column(String(1000), nullable=False)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     content_tags: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    country: Mapped[str] = mapped_column(String(80), nullable=False, default="")
+    ai_used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     pdf_metadata: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     extracted_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     upload_date: Mapped[datetime] = mapped_column(
@@ -163,11 +167,21 @@ def get_engine() -> Engine:
     return engine
 
 
+def _ensure_column(conn, table: str, column: str, ddl: str) -> None:
+    rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
+    names = {row[1] for row in rows}
+    if column not in names:
+        conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+
+
 def init_db() -> None:
     eng = get_engine()
     Base.metadata.create_all(eng)
     with eng.begin() as conn:
         conn.execute(text(FTS_DDL))
+        _ensure_column(conn, "authors", "verified", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "documents", "country", "VARCHAR(80) NOT NULL DEFAULT ''")
+        _ensure_column(conn, "documents", "ai_used", "INTEGER NOT NULL DEFAULT 0")
 
 
 def get_session():
@@ -320,7 +334,43 @@ def get_document_by_hash(db, document_hash: str) -> Document | None:
     return None
 
 
-def search_documents(db, query: str = "", tag: str | None = None, author: str | None = None):
+def document_content_tags(db) -> list[str]:
+    seen: set[str] = set()
+    labels: list[str] = []
+    rows = db.execute(select(Document.content_tags)).scalars().all()
+    for raw in rows:
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(value, list):
+            continue
+        for item in value:
+            text_item = str(item).strip()
+            key = text_item.casefold()
+            if not text_item or key in seen:
+                continue
+            seen.add(key)
+            labels.append(text_item)
+    return sorted(labels, key=str.casefold)
+
+
+def list_authors(db) -> list[Author]:
+    return list(db.execute(select(Author).order_by(Author.name)).scalars().all())
+
+
+def _has_exact_tag(document: Document, tag: str) -> bool:
+    needle = tag.casefold()
+    return any(item.casefold() == needle for item in document.tags_list())
+
+
+def search_documents(
+    db,
+    query: str = "",
+    tag: str | None = None,
+    author: str | None = None,
+    criteria: SearchCriteria | None = None,
+):
     stmt = select(Document).options(*DOCUMENT_LOAD)
     if query.strip():
         needle = query.strip().casefold()
@@ -334,13 +384,20 @@ def search_documents(db, query: str = "", tag: str | None = None, author: str | 
             clauses.append(Document.id.in_(fts_ids or [-1]))
         stmt = stmt.where(or_(*clauses))
     if tag:
-        tag_needle = tag.strip().casefold()
-        stmt = stmt.where(func.lower(Document.content_tags).like(f"%{tag_needle}%"))
+        known = {item.casefold() for item in document_content_tags(db)}
+        if tag.strip().casefold() not in known:
+            return []
     if author:
+        if db.execute(
+            select(Author.id).where(Author.name_key == normalize_name(author))
+        ).first() is None:
+            return []
         stmt = (
             stmt.join(DocumentAuthor)
             .join(Author)
             .where(Author.name_key == normalize_name(author))
         )
     documents = db.execute(stmt).unique().scalars().all()
-    return rank_documents(documents)
+    if tag:
+        documents = [item for item in documents if _has_exact_tag(item, tag.strip())]
+    return rank_documents(documents, criteria)
