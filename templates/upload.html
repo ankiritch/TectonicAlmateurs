@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Upload{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Upload a PDF</h1>
+  <p class="lede">The server will stamp author name and tags into the PDF metadata, store a SHA-256 hash, and index the text for search. Your identity tags ({{ author.tags_list() | join(', ') or 'none' }}) are always applied.</p>
+  {% if error %}
+    <p class="error">{{ error }}</p>
+  {% endif %}
+  <form method="post" action="/upload" enctype="multipart/form-data" class="stack">
+    <label>
+      PDF file
+      <input type="file" name="file" accept="application/pdf,.pdf" required>
+    </label>
+    <label>
+      Extra content tags
+      <input type="text" name="extra_tags" placeholder="optional extra tags">
+    </label>
+    <button type="submit">Store document</button>
+  </form>
+</section>
+{% endblock %}

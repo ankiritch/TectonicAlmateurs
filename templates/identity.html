@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Identify{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Author identity</h1>
+  <p class="lede">Set the name that will be attributed to uploads, and the content tags that describe your work.</p>
+  {% if error %}
+    <p class="error">{{ error }}</p>
+  {% endif %}
+  <form method="post" action="/auth" class="stack">
+    <label>
+      Name
+      <input type="text" name="name" required maxlength="200" value="{{ name_value or (author.name if author else '') }}">
+    </label>
+    <label>
+      Content tags
+      <input type="text" name="content_tags" placeholder="geology, internal-memo, q3" value="{{ tag_value }}">
+    </label>
+    <p class="hint">Separate tags with commas. They are copied onto documents you upload and used for search.</p>
+    <button type="submit">Continue to library</button>
+  </form>
+</section>
+{% endblock %}

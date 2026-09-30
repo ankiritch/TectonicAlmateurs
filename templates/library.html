@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Library{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Document library</h1>
+  <form method="get" action="/library" class="search-row">
+    <input type="search" name="q" value="{{ q }}" placeholder="Search title, tags, author, or PDF text">
+    <input type="text" name="tag" value="{{ tag }}" placeholder="Filter tag">
+    <input type="text" name="author" value="{{ author_filter }}" placeholder="Filter author">
+    <button type="submit">Search</button>
+  </form>
+</section>
+
+{% if documents %}
+  <ul class="doc-list">
+    {% for doc in documents %}
+      <li class="doc-card">
+        <div>
+          <h2>{{ doc.title }}</h2>
+          <p class="meta">{{ doc.filename }} · uploaded {{ doc.uploaded_at.strftime("%Y-%m-%d %H:%M") }} UTC by {{ doc.author.name }}</p>
+          <p class="tags">
+            {% for tag in doc.tags_list() %}
+              <span class="tag">{{ tag }}</span>
+            {% endfor %}
+          </p>
+          <p class="hash" title="SHA-256 of stored file">{{ doc.sha256 }}</p>
+        </div>
+        <div class="actions">
+          <a class="button" href="/api/documents/{{ doc.id }}/file">Download</a>
+          <a class="ghost" href="/api/documents/{{ doc.id }}">Metadata</a>
+        </div>
+      </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <p class="empty">No documents match this search. Upload a PDF to start the archive.</p>
+{% endif %}
+{% endblock %}
